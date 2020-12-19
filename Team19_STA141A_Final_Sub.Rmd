@@ -1,0 +1,605 @@
+---
+title: "Predicting if a Bank Client Subscribes to a Deposit"
+date: "12/14/2020"
+output:
+  html_document:
+    df_print: paged
+    fig_caption: yes
+  pdf_document: default
+---
+
+#### Team ID: Group 19
+##### Meredith Harrison (Boosting, Literature Review, Writing Report, Review Report and Code)
+##### Jasper Tsai (Logistic Regression and Lasso, Basic Random Forest, Boosting, Review Report and Code)
+##### Ankita Bhat (Variable Seclection with Random Forest, Basic Random Forest, Review Report and Code)
+
+```{r setup, include=FALSE}
+set.seed(1)
+knitr::opts_chunk$set(echo=FALSE,message=FALSE,warning=FALSE)
+
+library(ggplot2)
+library(cowplot)
+library(dplyr)
+library(rpart)          # decision tree methodology
+library(rpart.plot)     # decision tree visualization
+library(randomForest)   # random forest methodology
+library(gbm)            # boosting methodology
+library(pROC)
+library(glmnet)
+library(MASS)
+library(tidyverse)
+library(qwraps2)
+library(latexpdf)
+
+Data <- read.csv("/Users/meredithharrison/iCLoud Drive (Archive)/Documents/STA 141/Project/bank-additional-full.csv",sep =";")
+```
+
+
+```{r, data prep, include=FALSE}
+set.seed(1)
+str(Data)
+Data[Data == "unknown"] <- NA
+any(is.na(Data))
+Data = na.omit(Data)
+any(is.na(Data))
+
+Data$job = as.factor(Data$job)
+Data$marital = as.factor(Data$marital)
+Data$education = as.factor(Data$education)
+Data$default = as.factor(Data$default)
+Data$housing = as.factor(Data$housing)
+Data$loan = as.factor(Data$loan)
+Data$contact = as.factor(Data$contact)
+Data$month = as.factor(Data$month)
+Data$day_of_week = as.factor(Data$day_of_week)
+Data$poutcome = as.factor(Data$poutcome)
+Data$y = as.factor(Data$y)
+
+## getting rid of duration because "this input should only be included for benchmark purposes and should be discarded if the intention is to have a realistic predictive model."
+Data = Data %>% 
+  dplyr::select(-duration)
+str(Data)
+
+# Split Data into Training and Testing data
+## sample 70% of the row indexes for training the models
+train = sample(1:nrow(Data), 0.7*nrow(Data))
+train.data = Data[train,]
+test.data = Data[-train,]
+
+```
+
+
+## Background
+
+In this project, we analyze the a multivariate bank marketing dataset associated with phone-based marketing campaigns from a Portuguese banking institution. Phone-based marketing campaigns are important for generating business for financial institutions. Marketing campaigns are often tailored to certain clients, however sometimes they are broadly used to target new clients. Technology and statistical methods should be implemented to make marketing campaigns more successful by targeting clients that are more likely to subscribe (Moro et al., 2014).
+
+The bank data set contains 20 attributes and a single binary response. The binary response (yes/no) refers to whether a client will subscribe to a term deposit. The primary interest of this project is to explore relationships between the 20 attributes and the response and identify a model to predict whether clients will subscribe to a term deposit using classification methodologies (Argesti, 2018). In addition, we will determine if social and economic attributes impact a client's decision to subscribe to a term deposit. Finally, we will analyze the impact of the customer-sales representative conversations during the marketing campaign on term deposits. 
+
+For our classification analysis, we have selected the following three methods: 1) random forest, 2) boosting, and 3) logistic regression. Random forest was selected for its ability to fit independent trees to nonlinear data (UCD, 2018). Breiman (2001) used random forest on multiple datasets including those with a multitude of categorical and numeric predictors both, similar to our dataset, and found random forest to be successful method. Boosting was selected as it is similar to random forest, but rather than fitting independent trees, boosting fits trees in sequential fashion, using information from the previously fit tree. However, with this methodology, overfitting is often a problem (UCD, 2018). To eliminate overfitting with boosting, we implemented cross-validation (CV) to determine the parameter values for n.trees and shrinkage. For our third method we choose logistic regression for its ability to build models with relatively high accuracy when the number of noise variables is less than the number of explanatory variables (Kirasich et al., 2018). In comparison, Kirasich et al. (2018) reported that when implementing random forest, the true false positive rate increases with an increasing number of explanatory variables. Considering, we don't know which variables are noise and explanatory, we thought the previous three methods would provide an interesting comparison of model performance across the different classification methods. Finally, to complement the main analysis we have conducted variable selection using a random forest. Geneur et al. (2010) used random forest to find important variables for interpretation and to design a parsimonious predictive model, which aligns with our goals of using random forest for variable selection.
+
+
+### Reserach Questions
+1. Are all 20 attributes relevant to the predictive model for the client signing up for term deposit?
+
+2. Are the social and economic context attributes relevant to subscribing to long term deposit?
+
+3. Did the duration of a call from a sales representative during the bank’s marketing campaign impact whether or not a consumer chose to become a long-term subscriber?
+
+Answering these key questions will be of importance to banking institutions, as it will allow them to tailor their client recruiting efforts based on the results of this project. This will likely improve subscription rates and make the recruiting process more efficient as banks will be able to focus on the attributes that are known to have an effect term subscription. For a more cohesive report, additional literature review was done at the time each of the various methods were introduced and described.
+
+### Population and Study Design
+
+The data set considers real campaign marketing data from phone calls of a Portuguese banking institution from May 2008 to November 2010; in total, 41,188 contacts were in the dataset (Moro et al., 2014). All calls were recorded making this representative of clients within the bank. However, the data set only contains a single Portuguese bank, so it's likely not representative of all bank campaigns (particularly those outside of Portugal). However, results of this analysis would be a good starting place for other institutions looking to implement such screening methods. 
+
+## Analysis
+
+### Analysis Plan
+Before beginning with our statistical analysis, we first inspected the data missing values, which were represented by "unknown" in the data set. The removal of all unknowns resulted in a total of 30,488 contacts to be used for analysis. Then, we will consider the descriptive statistics for all features in the data set (shown below). In the set-up using the str() function, we determined that the response (y) was binary, and thus classification was the appropriate statistical method (Argesti, 2018). Duration was removed as it was noted to be extremely influential (for obvious reasons).
+
+### Descriptive Analysis
+
+After the removal of missing values, we considered summary statistics for all the features in our dataset, except duration, which was removed in our data set-up. For numerical predictors (i.e., age, campaign, pdays, previous, emp.var.rate, cons.price.idx, cons.conf.idx, euribor3m, and nr.employed), the distribution was summarized in table format using minimum, maximum, median, mean, and SD. For categorical predictors (i.e., job, marital, education, default, housing, loan, contact, month, day_of_week, and poutcome) the n and the associated percent of the total entries (in parentheses) were shown. 
+
+```{r,echo=FALSE}
+options(qwraps2_markup = "markdown")
+
+our_summary1 <-
+  list("Client Age" =
+       list("min"       = ~ min(age),
+            "median"    = ~ median(age),
+            "max"       = ~ max(age),
+            "mean (sd)" = ~ qwraps2::mean_sd(age)),
+       "Number of Campaign Contacts)" =
+       list("min"       = ~ min(campaign),
+            "median"    = ~ median(campaign),
+            "max"       = ~ max(campaign),
+            "mean (sd)" = ~ qwraps2::mean_sd(campaign)),
+        "Number of Days since Previous Campaign" =
+         list("min"       = ~ min(pdays),
+            "median"    = ~ median(pdays),
+            "max"       = ~ max(pdays),
+            "mean (sd)" = ~ qwraps2::mean_sd(pdays)),
+       "Number of Previous Contacts" =
+         list("min"       = ~ min(previous),
+            "median"    = ~ median(previous),
+            "max"       = ~ max(previous),
+            "mean (sd)" = ~ qwraps2::mean_sd(previous)),
+         "Employment Variation Rate" =
+         list("min"       = ~ min(emp.var.rate),
+            "median"    = ~ median(emp.var.rate),
+            "max"       = ~ max(emp.var.rate),
+            "mean (sd)" = ~ qwraps2::mean_sd(emp.var.rate)),
+         "Consumer Price Index" =
+           list("min"       = ~ min(cons.price.idx),
+            "median"    = ~ median(cons.price.idx),
+            "max"       = ~ max(cons.price.idx),
+            "mean (sd)" = ~ qwraps2::mean_sd(cons.price.idx)),
+          "Consumer Confidence Index" =
+            list("min"       = ~ min(cons.conf.idx),
+            "median"    = ~ median(cons.conf.idx),
+            "max"       = ~ max(cons.conf.idx),
+            "mean (sd)" = ~ qwraps2::mean_sd(cons.conf.idx)),
+          "Daily Indicator" =
+            list("min"       = ~ min(euribor3m),
+            "median"    = ~ median(euribor3m),
+            "max"       = ~ max(euribor3m),
+            "mean (sd)" = ~ qwraps2::mean_sd(euribor3m)),
+          "Number of Employees" =
+            list("min"       = ~ min(nr.employed),
+            "median"    = ~ median(nr.employed),
+            "max"       = ~ max(nr.employed),
+            "mean (sd)" = ~ qwraps2::mean_sd(nr.employed)),
+       #switching to categorical predictors
+        "Job Type" =
+          list("Administration" = ~ qwraps2::n_perc0(job == "admin."),
+            "Blue-Collar"  = ~ qwraps2::n_perc0(job == "blue-collar"),
+            "Entrepreneur" = ~ qwraps2::n_perc0(job == "entrepreneur"),
+            "Housemaid" = ~ qwraps2::n_perc0(job == "housemaid" ),
+            "Management"= ~ qwraps2::n_perc0(job == "management"),
+            "Retired" = ~ qwraps2::n_perc0(job == "retired"),
+            "Self-Employed" = ~ qwraps2::n_perc0(job == "self-employed"),
+            "Services"= ~ qwraps2::n_perc0(job == "services"),
+            "Student" = ~ qwraps2::n_perc0(job == "student"),
+            "Technician" = ~ qwraps2::n_perc0(job == "technician"),
+            "Unempolyed"= ~ qwraps2::n_perc0(job == "unemployed")),
+        "Marital Status" =
+          list("Divorced" = ~ qwraps2::n_perc0(marital == "divorced"),
+            "Married"  = ~ qwraps2::n_perc0(marital == "married"),
+            "Single" = ~ qwraps2::n_perc0(marital == "single")),
+        "Education Level" =
+          list("Basic 4 Year" = ~ qwraps2::n_perc0(education == "basic.4y"),
+            "Basic 6 Year"  = ~ qwraps2::n_perc0(education == "basic.6y"),
+            "Basic 9 Year"  = ~ qwraps2::n_perc0(education == "basic.9y"),
+            "High School Diploma" = ~ qwraps2::n_perc0(education == "high.school"),
+             "Illiterate" = ~ qwraps2::n_perc0(education == "illiterate"),
+             "Professional Course" = ~ qwraps2::n_perc0(education == "professional.course"),
+             "Univerisity Degree" = ~ qwraps2::n_perc0(education == "university.degree")),
+        "Credit in Default" =
+          list("No" = ~ qwraps2::n_perc0(default == "no"),
+            "Yes"  = ~ qwraps2::n_perc0(default == "yes")),
+        "Housing Loan" =
+          list("No" = ~ qwraps2::n_perc0(housing == "no"),
+            "Yes"  = ~ qwraps2::n_perc0(housing == "yes")),
+          "Contact Type" =
+          list("Cellular" = ~ qwraps2::n_perc0(contact == "cellular"),
+            "Telephone"  = ~ qwraps2::n_perc0(contact == "telephone")),
+        "Month of Contact" =
+          list("January" = ~ qwraps2::n_perc0( month == "jan"),
+              "February"  = ~ qwraps2::n_perc0(month == "feb"),
+              "March"  = ~ qwraps2::n_perc0(month == "mar"),
+              "April"  = ~ qwraps2::n_perc0(month == "apr"),
+              "May"  = ~ qwraps2::n_perc0(month == "may"),
+              "June"  = ~ qwraps2::n_perc0(month == "jun"),
+              "July"  = ~ qwraps2::n_perc0(month == "jul"),
+              "August"  = ~ qwraps2::n_perc0(month == "aug"),
+              "September"  = ~ qwraps2::n_perc0(month == "sep"),
+              "October"  = ~ qwraps2::n_perc0(month == "oct"),
+              "November"  = ~ qwraps2::n_perc0(month == "nov"),
+              "December" = ~ qwraps2::n_perc0(month == "dec")),
+        "Last contact Day of the Week" =
+          list("Monday" = ~ qwraps2::n_perc0(day_of_week == "mon"),
+            "Tuesday" = ~ qwraps2::n_perc0(day_of_week == "tue"),
+            "Wednesday" = ~ qwraps2::n_perc0(day_of_week == "wed"),
+            "Thursday" = ~ qwraps2::n_perc0(day_of_week == "thu"),
+            "Friday" = ~ qwraps2::n_perc0(day_of_week == "fri")),
+        "Outcome of Last Campaign" =
+          list("Failure" = ~ qwraps2::n_perc0(poutcome == "failure"),
+            "Non-Existent"  = ~ qwraps2::n_perc0(poutcome == "nonexistent"),
+            "Success" = ~ qwraps2::n_perc0(poutcome == "success")),
+        "Subscribed (y)" =
+          list("Yes" = ~ qwraps2::n_perc0(y == "yes"),
+            "No"  = ~ qwraps2::n_perc0(y == "no"))
+          )
+      
+whole <- summary_table(Data, our_summary1)
+whole
+```
+
+## Classification Analysis
+
+We used three methods for classification: random forest, logistic regression, and boosting. For extra credit, we implemented variable selection by random forest.  A more detailed explanation of each of the analyses is shown in the subheadings below. Before beginning, we fit the dataset (minus duration) with the all unknown values removed into a training and test data set, where 70% of the data set was allocated to training. 
+
+### Random Forest
+
+A random forest was fit with the randomForest from the randomForest package using all of the predictors except duration. The randomForest model was fit using 500 trees. Following creation of the random forest, a confusion matrix and accuracy were calculated for comparison of results acorss analysis type. Then, out-of-bag error and test error were calculated. A randomForest model was fit to both the training and test data. Finally for ease of comparison across models, we calculated accuracy and area under the curve (AUC). All code and output is shown in the results section.
+
+### Boosting
+
+A gradient boosting machine (i.e., boosting) was fit using the gbm function from the gbm package. Cross-validation was used to determine the correct parameter values for the number of trees (i.e, n.trees) and shrinkage, which are arguments that are used in the gbm function. Specifically, k-fold cross validation (CV) was used where the number of folds was set to 5. We tested the following n.tree values: 1000, 2000, and 3,000 in increments , and we tested the following shrinkage values 0.01, 0.02, and 0.03.
+
+### Logistic Regression
+
+Before beginning the analysis, balance was assessed using the table function. The data was determined to be unbalanced. A logistic model was fit with the glm function from the base R package using the specification "family = binomial." Considering the number of predictors (i.e., 20), we believed multicollinearity might be an issue. Thus, we evaluated multicollinearity for all 20 predictors using a standardized GVIF, where GVIF values > 10 indicated multicollinearity (Fox and Monette, 1992). The feature with the greatest GVIF value above the determined threshold was dropped. Then, GVIF was re-calculated, and the feature with the next greatest GVIF was dropped. The process was completed when all the remaining features had GVIF below the threshold of 10. The remaining features were considered for the analysis.
+
+All the predictors except those that were excluded after previously checking multicollinearity were included in the model. Are under the curve (AUC) curve was created to display the model sensitivity and specificity simultaneously. Next, with hopes of improving our model, we fit a LASSO to obtain a subset of predictors that minimized our prediction error. To set up the LASSO, a model matrix was created for training and test datasets and used for CV and identifying the best lambda. For CV comparison, we evaluated AUC. All code and output is shown in the results section.
+
+
+### Extra Credit
+#### Variable Selection using Random Forest
+
+The random forest function resulted in two subsets of variables, the first being important variables that include some redundancy, which is important for interpretation. The second subset is much smaller and corresponds to a model to avoid redundancy in future predictions. VSURF, an R package for variable selection using random forests, follows a two-step strategy that addressed both subsets by breaking them down into three processing steps. The first processing step is the thresholding step, which gets rid of the variables that had negative importance, where negative importance is defined as that removal of variables that would improve the performance of the model (Geneur, 2010). The second processing step is the interpretation step, which identifies important that are highly related to the response variable. Variables were ranked by importance and unimportant variables were eliminated. Finally, the third step and second of the two step strategy is the prediction step. The objective of this step is to find the variables that would reduce redundancy. The results and code are shown below. 
+
+
+# Results
+### Random Forest
+
+After running the random forest using the training dataset with 500 trees, 4 variables were tried at each split and our out-of-bag (OOB) error estimate was 5.81%.The OOB tested the optimal number of variables at each split. Based on "Random Forest Plot 1" shown below, we could have chosen a smaller number of trees for the random forest. The graph levels off at about 25 trees, so we could have chosen to run 100 trees, instead of 500 trees, which would greatly decrease the computation time without sacrificing model performance. 
+
+After testing mtry values using cross-validation on the training and test datasets, we created "Random Forest Plot 2," depicting m on the x-axis and error on the y-axis, and both OOB and test error are shown on the plot. From "Random Forest Plot 2" we can conclude, the correct number of mtries is two since that has the lowest OOB error. Next model importance was shown in "Random Forest Plot 3", and this showed slight differences in variable importance based on accuracy versus the Gini Index. In both graphs, the higher the value, the greater the importance, and the top three most important variables (i.e., age, job and euribor3m) were the same under both criteria. Finally, the AUC derived from this model was 0.799, and the curve is shown below in "Random Forest AUC." 
+
+Next, we re-ran the random forest using the variables that were selected in variable selection using VSURF (i.e., pdays, euribor3m, and poutcome) and the optimal mtry (i.e., 2) that was found using CV in the basic random forest model. A confusion matrix, accuracy, and AUC were all calculated. Area under the curve was calculated before and after the prediction step. The AUC from prior to the prediction step was 0.799. The AUC associated with the final prediction step was 0.724. When we compare "Best Random Forest Plot 1" to "Best Random Forest Plot 3," we notice we could have used a much fewer number of trees for the final prediction step. This occurred because we only had 3 predictors, and thus the trees were quite simplistic reducing the number required. It is interesting that when ee compare the variable importance plot before and after the prediction step, that the top three variables change. This occurs do to reasons described under the results in the extra credit section. Ultimately, the model selected by VSURF resulted in a lower AUC, but this may have occurred due to the model being too parsimonious.  
+
+
+```{r, echo=FALSE}
+# random forest code
+
+set.seed(1)
+Data$y = as.factor(Data$y)
+
+# Create the Random Forest, calculate confusion matrix accuracy, using the train data
+rf.model = randomForest(y~., data = Data, subset = train, importance=T)
+rf.model
+rf.model.confusion = rf.model$confusion
+rf.model.confusion
+rf.model.accuracy = ((rf.model.confusion[1,1]+rf.model.confusion[2,2])/sum(rf.model.confusion))
+rf.model.accuracy 
+
+## use this to show that we can run a smaller ntree next time
+plot(rf.model, main = "Random Forest Plot 1")
+
+```
+
+```{r,echo=FALSE} 
+# continued random forest code
+set.seed(1)
+
+## test mtry
+oob.err = double(19)                       #Out-of-bag error
+test.err = double(19)                      #Test error
+for(mtry in 1:19){
+  fit.train = randomForest(y~., data = Data, subset=train, mtry=mtry, ntree =50)
+  oob.err[mtry] = fit.train$err.rate[1]
+  fit.test = randomForest(y~., data = Data, subset=-train, mtry=mtry, ntree =50)
+  test.err[mtry] = fit.test$err.rate[1]
+}
+
+
+matplot(1:mtry, cbind(test.err, oob.err), pch = 23, col = c("red", "blue"), type = "b", ylab="Error",xlab="m", main = "Random Forest Plot 2")
+legend("topright", legend = c("OOB", "Test"), pch = 23, col = c("blue", "red"))
+cbind(test.err, oob.err)
+
+## show model importance.
+varImpPlot(rf.model, main= "Random Forest Plot 3- Var. Importance")
+
+# Graph Area under curve for test data.
+rf.predictions <- predict(rf.model, Data[-train,],ntrees=500, type='prob')
+head(rf.predictions)
+
+## Area under the curve.
+roc1 = roc(response = Data$y[-train],predictor = rf.predictions[,2])
+plot(roc1,print.auc=TRUE,print.thres=TRUE,auc.polygon=TRUE,grid=c(0.1,0.1), main = "Random Forest AUC")
+```
+
+#### Random Forest using VSURF (extra credit) Results
+
+```{r, echo=FALSE}
+#randomm forest with vsurf selected variables
+
+set.seed(1)
+
+
+Data2 =Data %>% 
+  dplyr::select(-default, -loan, -education, -previous, -marital, -campaign, -housing)
+
+
+rf.model2 = randomForest(y~., data = Data2, subset = train, importance=T)
+rf.model2
+rf.model2.confusion = rf.model2$confusion
+rf.model2.confusion
+rf.model2.accuracy = ((rf.model2.confusion[1,1]+rf.model2.confusion[2,2])/sum(rf.model2.confusion))
+rf.model2.accuracy
+plot(rf.model2, main =  "Best Random Forest Plot 1")
+
+# Graph Area under curve.
+rf2.predictions <- predict(rf.model2, Data[-train,],ntrees=500,type = "prob")
+head(rf2.predictions)
+
+## show model importance.
+varImpPlot(rf.model2, main= "Best Random Forest Plot 2- Var. Importance")
+
+## Area under the curve.
+roc.rf2 = roc(response = Data$y[-train],predictor = rf2.predictions[,2])
+plot(roc.rf2,print.auc=TRUE,print.thres=TRUE,auc.polygon=TRUE,grid=c(0.1,0.1), main = "Best Random Forest AUC (before prediction)")
+
+
+## after the prediction step 
+# additional variables are dropped
+
+Data3 =Data %>% 
+  dplyr::select(-default, -loan, -education, -previous, -marital, -campaign, -housing, - month, -emp.var.rate, -nr.employed,-cons.price.idx, -cons.conf.idx, -contact, -job, -day_of_week, -age)
+
+
+rf.model3 = randomForest(y~., data = Data3, subset = train, importance=T)
+rf.model3
+rf.model3.confusion = rf.model3$confusion
+rf.model3.accuracy = ((rf.model3.confusion[1,1]+rf.model3.confusion[2,2])/sum(rf.model3.confusion))
+rf.model3.accuracy
+plot(rf.model3, main = "Best Random Forest Plot 3")
+
+# Graph Area under curve.
+rf3.predictions <- predict(rf.model3, Data[-train,],ntrees=500,type = "prob")
+head(rf3.predictions)
+
+
+## show model importance
+varImpPlot(rf.model3, main = "Best Random Forest Plot 4- Var. Importance")
+
+roc.rf3 = roc(response = Data$y[-train],predictor = rf3.predictions[,2])
+plot(roc.rf3,print.auc=TRUE,print.thres=TRUE,auc.polygon=TRUE,grid=c(0.1,0.1), main = "Final Best Random Forest AUC")
+
+
+```
+
+### Logistic Regression
+We found our dataset was heavily unbalanced, with a greater number of "no" (n = 26,629) responses than "yes" (n = 3,859) for our response variable y. Recognizing the unbalance, we relied on AUC rather than accuracy as an indicator of model performance because accuracy is a very poor metric of unbalanced data. Instead, we rely on ROC and AUC, which are a measure of how good the model is at distinguishing between various classes (Yadav, 2020). 
+
+Based on the results of GVIF, the variables nr.employes and emp.var.rate were dropped from the logistic model due to multicollinearity. The results from this model are shown in  summary(log.model.2). We can see not all of these predictors are significant from the summary output. The AUC associated with our log.model.2 was 0.793. With the LASSO model fitted on the best lambda from CV, the AUC associated with LASSO was 0.800. This indicated based on AUC, we prefer the logistic model over the LASSO. This is not surprising considering the goal of implementing the 
+LASSO was to develop a better model. However, the difference between the two methods was quite small.
+
+```{r, echo=FALSE}
+#Logistic regression
+
+set.seed(1)
+
+table(Data$y) #checking balance
+
+#log model with predictors nr.employed and emp.var rate removed for multico and duration removed
+log.model.2 = glm(y ~ age + job + marital + education + default + housing + loan + contact +  
+                    month + day_of_week + campaign + pdays + previous + poutcome + cons.price.idx +
+                    cons.conf.idx + euribor3m, data = train.data, family = binomial); summary(log.model.2)
+
+# graph roc and get the results comparable
+log.model.2.predict <- log.model.2 %>% predict(test.data, type = "response")
+roc3=roc(Data$y[-train],log.model.2.predict)
+plot(roc3,print.auc=TRUE,print.thres=TRUE,auc.polygon=TRUE,grid=c(0.1,0.1), main = "Logistic Regression AUC")
+
+```
+
+
+```{r, echo=FALSE}
+# lasso with logistic
+
+set.seed(1)
+
+## fit Lasso onto Logistic Regression
+### create a matrix with categorical as dummy variable
+x = model.matrix(y~., Data)[,-1]
+y = Data %>%
+  dplyr::select(y) %>%
+  unlist() %>%
+  as.numeric() 
+
+## create matrix for x,y train and test set to estimate the test error of lambda
+x_train = model.matrix(y~., train.data)[,-1]
+x_test = model.matrix(y~., test.data)[,-1]
+y_train = train.data %>%
+  dplyr::select(y) %>%
+  unlist() %>%
+  as.numeric()
+y_test = test.data %>%
+  dplyr::select(y) %>%
+  unlist() %>%
+  as.numeric()
+
+## We perform k-fold cross-validation and compute the associated training error.
+cv.out = cv.glmnet(x_train, y_train, alpha = 1, nfold=10, family = "binomial")
+# include this plot to show a visual representation of what we are doing to choose lambda
+plot(cv.out, main= "Best Lambda Plot")
+## get the best lambda
+bestlam = cv.out$lambda.min
+
+# Showing that at best lambda value, the coefficients for predictors will be the following
+# Don't know if it is significant enough to show.
+coef(cv.out, bestlam)
+
+# Final model with lambda.min, Logistic regression with L1 norm penalty
+log.model.lasso <- glmnet(x_train, y_train, alpha = 1, family = "binomial", lambda = bestlam)
+probabilities <- log.model.lasso %>% predict(newx = x_test)
+
+# assess model accuracy, only predicting values and accuracy not AUC
+predicted.classes <- ifelse(probabilities > 0.5, "yes", "no")
+observed.classes <- test.data$y
+mean(predicted.classes == observed.classes)
+# ^ gives you an accuracy, but since this data is unbalances AUC will be a better gauge.
+
+# Getting the AUC of the lasso logistic model with best lambda
+log.model.lasso2 <- glmnet(x_train, y_train, alpha = 1, family = "binomial")
+summary(log.model.lasso2)
+log.model.lasso2.predict <- log.model.lasso2 %>% predict(x_test,s = bestlam, type = "response")
+roc3=roc(Data$y[-train],log.model.lasso2.predict)
+plot(roc3,print.auc=TRUE,print.thres=TRUE,auc.polygon=TRUE,grid=c(0.1,0.1), main= "Logistic Regression with LASSO AUC")
+```
+
+### Boosting
+
+The summary from the initial gbm model is shown in summary(gbm.model). The AUC associated with this was 0.798. However, after using CV to find the correct number of n.trees and shrinkage, we calculated the following mean accuracies based on the five folds and parameter combinations:
+
+CROSS-VALIDATTED K-FOLDS
+
+| Model      | n.trees  | shrinkage | Accuracy | Rank |
+|------------|----------|-----------|----------|------|
+| 1a         |  1000    |   0.01    | 0.885654 |  1   |  
+| 1b         |  1000    |   0.02    | 0.884257 |  2   |                
+| 1c         |  1000    |   0.03    | 0.884024 |  3*  |                 
+| 2a         |  2000    |   0.01    | 0.884024 |  3*  |     
+| 2b         |  2000    |   0.02    | 0.883326 |  6   |                
+| 2c         |  2000    |   0.03    | 0.882394 |  8   | 
+| 3a         |  3000    |   0.01    | 0.884024 |  3*  |     
+| 3b         |  3000    |   0.02    | 0.883093 |  7   |                
+| 3c         |  3000    |   0.03    | 0.881928 |  9   | 
+
+
+From the ranking shown in the table above, we can see the best parameter combination was n.trees = 1000 and shrinkage = 0.01, which were the parameter combination that were fit to the initial gbm model, so the gbm was not re-ran. The final AUC derived from boosting is shown in "Boosting AUC" below.
+```{r, echo=FALSE}
+# boosting
+
+set.seed(1)
+Data[,"y"]=ifelse(Data[,"y"]=="yes",1,0)
+
+# trControl <- trainControl(method  = "cv", number  = 10)
+
+# use at least 1000 trees
+gbm.model <- gbm(
+  formula = y ~ .,
+  distribution = "bernoulli",
+  data =  Data[train,],
+  n.trees = 1000,
+  shrinkage = 0.01,
+)
+summary(gbm.model)
+
+# see performance on Test data
+boost.pred=predict(gbm.model,newdata=Data[-train,],n.trees = 1000, type = "response")
+plot(boost.pred, main = "Boosting Plot 1")
+abline(h=0.5)
+pred.out=ifelse(boost.pred>=0.5,1,0)
+# confusion matrix
+(gbm.conf=table(pred.out,Data$y[-train]))
+
+# ROC Curve
+roc2=roc(Data$y[-train],boost.pred)
+plot(roc2,print.auc=TRUE,print.thres=TRUE,auc.polygon=TRUE,grid=c(0.1,0.1), main = "Boosting AUC")
+```
+
+```{r,echo=FALSE}
+set.seed(1)
+# creating tuning parameters
+tree.num <- c(1000,2000,3000)
+shrink.num <- (1:3)/100
+
+### Define the "folds" in this case 5 folds
+Data.cv <- train.data %>% mutate(fold = sample(1:5, nrow(train.data), replace = TRUE))
+Data.cv[,"y"]=ifelse(Data.cv[,"y"]=="yes",1,0)
+
+### function to cv single gbm model give back mean accuracy
+model.create.cv <- function(tree.num,shrink.num){
+  for(k in 1:5){
+    cvtraindata = Data.cv %>% filter(fold != k)
+    cvtraindata = cvtraindata[1:20]
+    cvtestdata = Data.cv %>% filter(fold == k)
+    cvtestdata = cvtestdata[1:20]
+    models <- gbm( formula = y ~ .,
+                   distribution = "bernoulli",
+                   data =  cvtraindata,
+                   n.tree = tree.num,
+                   shrinkage = shrink.num
+    )
+    boost.pred.created=predict(models,newdata =cvtestdata, n.trees = tree.num, type = "response")
+    boost.pred.created
+    pred.outed=ifelse(boost.pred.created>=0.5,1,0)
+    gbm.confed=table(pred.outed,cvtestdata$y)
+    accuracy = (gbm.confed[1,1]+gbm.confed[2,2])/(sum(gbm.confed))
+    #print(accuracy)
+  }
+  print(paste("Mean accuracy of cv for n.tree =",tree.num,"shrinkage =",shrink.num))
+  mean.accuracy =mean(accuracy)
+  print (mean.accuracy)
+}
+# Running the cv for the given parameters (long runtime)
+for (i in tree.num) {
+  for(j in shrink.num)
+    mean.accuracy = model.create.cv(i,j)
+}
+
+```
+
+### Extra Credit
+
+The thresholding step got rid of the features default and loan. From the next step, the following 12 variables in this order were identified-- euribor3m, month, emp.var.rate, nr.employed, cons.price.idx, cons.conf.idx, contact, job, pdays, day_of_week, age, and poutcome. The greatest reduction of error occured between the first and second steps and can be seen between the thresholding and interpretation step. This can be seen in the graph on the top right and bottom left, respectively.
+
+The third step step lept us with the following three variables : 1) euribor3m, 2) pdays, and 3) poutcome. This tells us that for prediction purposes for future campaigns, the only variables that need to be used are these three. This is shown in the graph in the bottom right corner. VSURF, random forests are typically built using ntree = 2000 trees. However due to processing power, size of the dataset and memory space required, we were not able to run code with that default. Cross-referencing with other readings on defining parameters, we confirmed that for large datasets, trees had to be around 500 or more, and went with that metric. In terms of the mtry value for classification model purposes, the value is the square root of the number of predictor values, rounded down.
+
+```{r,echo=FALSE}
+v <- data.frame(Data$age, Data$job, Data$marital, Data$education, Data$default, Data$housing, Data$loan, Data$contact, Data$campaign, Data$previous, Data$pdays, Data$month, Data$day_of_week, Data$poutcome, Data$emp.var.rate, Data$cons.price.idx, Data$cons.conf.idx, Data$euribor3m, Data$nr.employed)
+
+
+library(VSURF)
+data.vsurf <- VSURF(v, as.factor(Data$y),ntree =500, mtry = 4)
+summary(data.vsurf)
+plot(data.vsurf)
+
+names(data.vsurf)
+
+#Intermediate Results
+#assign each input variable a position (based on the order in the data frame)
+number <- c(1 : 19)
+
+#Thresholding Step
+number[data.vsurf$varselect.thres]
+
+#Interpretation Step
+number[data.vsurf$varselect.interp]
+
+#Prediction Step
+number[data.vsurf$varselect.pred]
+
+```
+
+# Discussion
+
+Finally, we will conclude the report by comparing results across all 4 methodologies that were presented above and answer the three questions that fueled our analyses. Logistic regression was performed without and with LASSO, but since the LASSO logistic model was superior, those results are presented in the table below.
+
+| Method             |  AUC    | Rank  | 
+|--------------------|---------|-------|
+| Random Forest      |  0.799  |  2    |             
+| Random Forest (s)  |  0.724  |  4    |                        
+| Boosting           |  0.798  |  3    |                     
+| Logistic (w/LASSO) |  0.800  |  1    |                   
+
+A greater AUC is an indicator of the best performing model. Based results shown in the above table, the superior model based on AUC was Logistic (w/LASSO). Although the AUC were very similar between the random forest and Logistic (w/LASSO), we would prefer the Logistic (w/LASSO) because it is a simpler model that is less computationally intensive with results that are easier to interpret.
+
+### Answers to Research Questions
+1. No, all 20 attributes are not relevant to the model. We had some issues with multicollinearity among the social and economic indicator, which indicated correlation and that all variables were not relevant to the model. Further, when we looked at the results from the straight Logistic Regression, we saw many of the predictors were not significant. These results were further emphasized by the variable importance plots that were shown across the various classifcation methods.
+
+2. Yes, some social and economic indicators were relevant to determining whether a client subscribed to a term deposit. In nearly all the methods, euribor3m, which was a "Daily indicator" was highly ranked among the variable importance plot. This is not surprising considering clients are most likely to subscribe when the economy is doing well.
+
+
+3. As indicated by the description of the dataset, duration was extremely influential on subscribing to a long-term deposit. It was recommended to be only used as a benchmark. Preliminary analyses that were not included in this report showed duration to be extremely influential on variable importance plots. Thus, duration was dropped from the dataset before completing random forest, logistic regression, and boosting. However, it is important to note for banking institutions that longer call durations were associated with increased campaign success.
+
+
+#### Literature Cited
+Agresti, Alan. 2018. An introduction to categorical data analysis. John Wiley & Sons.
+
+Breiman, L. 2001. Random Forests. Statistics Department. University of California, Berkely.
+
+Fox, J., and G. Monette. 1992. Generalized Collinearity Diagnostics. Journal of the American Statistical Association 87(417):178–83. 
+
+Genuer, R., J.M. Poggi, and C. Tuleau-Malot. 2010. Variable selection using random forests. Pattern Recognition Letters. 31(14):2225-2236. 
+
+Kirasich, K., T. Smith, and B. Sadler. 2018. Random Forest vs Logistic Regression: Binary Classification for Heterogeneous Datasets," SMU Data Science Review, Vol. 1 : No. 3 , Article 9.
+
+Moro, S., P. Cortez, and P. Rita. 2014. A Data-Driven Approach to Predict the Success of Bank Telemarketing. Decision Support Systems, Elsevier, 62:22-31.
+
+UCD. 2018. Gradient Boosting Machines. UC Davis Business Analytics R Programming Guide. 2018.
+
+Yadav, D. 2020. Weighted Regression for an Imbalanced Dataset.Towards Data Science.
